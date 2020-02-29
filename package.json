@@ -1,15 +1,24 @@
 {
-  "name": "akko",
+  "name": "@nmattela/akko",
   "version": "1.0.0",
-  "description": "",
+  "description": "Akko.js: The Actor-Based Reactive Web Framework",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
-  "author": "",
+  "author": "Nicolas Mattelaer",
   "license": "ISC",
   "dependencies": {
     "akkajs": "^1.0.1"
-  }
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nmattela/akko-js.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nmattela/akko-js/issues"
+  },
+  "homepage": "https://github.com/nmattela/akko-js#readme"
 }

@@ -3,6 +3,7 @@ import akkajs from 'akkajs';
 const system = akkajs.ActorSystem.create();
 
 let uniqueId = 0;
+
 export default function _jsx(jsxObject) {
     if(!(typeof jsxObject === 'object')) {
         return jsxObject;
@@ -18,18 +19,18 @@ export default function _jsx(jsxObject) {
             });
 
         if(jsxObject.children)
-            jsxObject.children.forEach(child => {
+            jsxObject.children.flat().forEach(child => {
                 if(child instanceof Node) {
                     element.appendChild(child)
-                } else if(typeof child === 'object') {
+                } else if(child instanceof HookBinder) {
                     child.akkomponent.node.setAttribute('akkohook', child.akkomponent.identifier);
                     element.appendChild(child.akkomponent.node);
                     child.actorInstance.tell({
-                        type: 'parent',
+                        type: 'hook',
                         value: child.akkomponent.node
                     });
-                } else {
-                    element.innerHTML = child;
+                } else if(child !== null) {
+                    element.appendChild(document.createTextNode(child));
                 }
             });
         return element;
@@ -39,15 +40,16 @@ export default function _jsx(jsxObject) {
             uniqueId++;
             child.identifier = uniqueId
         }
+
         if(child.type === 'sync') {
             child.props = jsxObject.attributes;
             return child.createNode();
         } else {
-            const cashDesk = new CashDesk(child);
-            const cashDeskActor = system.spawn(cashDesk);
-            cashDesk.actorInstance = cashDeskActor;
-            child.actor.tell(jsxObject.attributes, cashDeskActor);
-            return cashDesk
+            const hookBinder = new HookBinder(child);
+            const hookBinderActor = system.spawn(hookBinder);
+            hookBinder.actorInstance = hookBinderActor;
+            child.actor.tell(jsxObject.attributes, hookBinderActor);
+            return hookBinder
         }
     }
 }
@@ -96,6 +98,16 @@ export class AsyncComponent extends Akkomponent {
         this.actor = system.spawn(new Akkommunication(this));
     }
 
+    async createNode() {
+        this.node = await this.render();
+        this.node.setAttribute('akkoid', this.identifier);
+        return this.node;
+    }
+
+    async render() {
+        return null;
+    }
+
 }
 
 class Akkommunication extends akkajs.Actor {
@@ -105,18 +117,17 @@ class Akkommunication extends akkajs.Actor {
         this.receive = this.createNode.bind(this)
     }
 
-    createNode(props) {
+    async createNode(props) {
         this.akkomponent.props = props;
-        this.akkomponent.createNode();
         this.sender().tell({
             type: 'child',
-            value: this.akkomponent.node
+            value: await this.akkomponent.createNode()
         })
     }
 }
 
 //The Cash Desk, where child and parent meet ;p
-class CashDesk extends akkajs.Actor {
+class HookBinder extends akkajs.Actor {
     constructor(akkomponent) {
         super();
 
@@ -127,9 +138,11 @@ class CashDesk extends akkajs.Actor {
         this.actorInstance = null;
 
         this.child = null;
+        this.hook = null;
 
         this.observers = {
-            child: []
+            child: [],
+            hook: []
         }
     }
 
@@ -146,7 +159,10 @@ class CashDesk extends akkajs.Actor {
     }
 
     unify() {
-        if(this.child) {
+        if(this.child && this.hook) {
+            this.hook.parentNode.replaceChild(this.child, this.hook);
+            this.self().kill()
+        } else if(this.child) {
             const hook = tree.querySelector(`[akkohook="${this.akkomponent.identifier}"]`);
             if(hook)
                 hook.parentNode.replaceChild(this.child, hook);
@@ -157,25 +173,8 @@ class CashDesk extends akkajs.Actor {
 
 let tree;
 
-function findRoot(tree, newTree) {
-    const akkoid = newTree.getAttribute('akkoid');
-    function rec(prevRoot, currRoot) {
-        if(currRoot.getAttribute('akkoid') === akkoid)
-            return {
-                root: prevRoot,
-                entry: currRoot
-            };
-        else {
-            const children = [].slice.call(currRoot.children);
-            for(let i = 0; i < children.length; i++) {
-                const res = rec(currRoot, children[i]);
-                if(res) return res;
-            }
-        }
-    }
-
-    const appTree = tree.firstChild;
-    return rec(tree, appTree);
+function findRoot(newTree) {
+    return tree.querySelector(`[akkoid="${newTree.getAttribute('akkoid')}"]`)
 }
 
 function update(component) {
@@ -187,16 +186,13 @@ function update(component) {
     });
 
     if(component.type === 'sync') {
-        const oldTree = findRoot(tree, newTree);
-        oldTree.root.replaceChild(newTree, oldTree.entry);
+        const oldTree = findRoot(newTree);
+        oldTree.parentNode.replaceChild(newTree, oldTree)
     } else {
-        const oldTree = findRoot(tree, newTree.akkomponent.node);
+        const oldTree = findRoot(newTree.akkomponent.node);
         newTree.actorInstance.tell({
-            type: 'parent',
-            value: {
-                element: oldTree.root,
-                placeholder: oldTree.entry
-            }
+            type: 'hook',
+            value: oldTree
         });
     }
 
@@ -209,7 +205,6 @@ export function render(docRoot, appRoot) {
         attributes: {},
         children: null
     });
-
     docRoot.appendChild(appTree);
     tree = docRoot
 }
