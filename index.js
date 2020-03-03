@@ -3,11 +3,26 @@ import akkajs from 'akkajs';
 const system = akkajs.ActorSystem.create();
 
 let uniqueId = 0;
-
 export default function _jsx(jsxObject) {
-    if(!(typeof jsxObject === 'object')) {
-        return jsxObject;
-    } else if(!jsxObject.elementName || !(typeof jsxObject.elementName === 'object')) {
+    if(Object.getPrototypeOf(jsxObject.elementName) instanceof Akkomponent) {
+        const component = jsxObject.elementName;
+
+        if(!component.identifier) {
+            uniqueId++;
+            component.identifier = uniqueId;
+        }
+
+        if(Object.getPrototypeOf(component) instanceof SyncComponent) {
+            component.props = jsxObject.attributes;
+            return component.createNode();
+        } else if(Object.getPrototypeOf(component) instanceof AsyncComponent) {
+            const hookBinder = new HookBinder(component);
+            const hookBinderActor = system.spawn(hookBinder);
+            hookBinder.actorInstance = hookBinderActor;
+            component.actor.tell(jsxObject.attributes, hookBinderActor);
+            return hookBinder
+        }
+    } else {
         const element = document.createElement(jsxObject.elementName);
 
         Object.entries(jsxObject.attributes)
@@ -34,23 +49,6 @@ export default function _jsx(jsxObject) {
                 }
             });
         return element;
-    } else {
-        const child = jsxObject.elementName;
-        if(!child.identifier) {
-            uniqueId++;
-            child.identifier = uniqueId
-        }
-
-        if(child.type === 'sync') {
-            child.props = jsxObject.attributes;
-            return child.createNode();
-        } else {
-            const hookBinder = new HookBinder(child);
-            const hookBinderActor = system.spawn(hookBinder);
-            hookBinder.actorInstance = hookBinderActor;
-            child.actor.tell(jsxObject.attributes, hookBinderActor);
-            return hookBinder
-        }
     }
 }
 
@@ -159,13 +157,14 @@ class HookBinder extends akkajs.Actor {
     }
 
     unify() {
-        if(this.child && this.hook) {
+        if(this.child && this.hook && this.hook.isConnected && this.hook.parentNode) {
             this.hook.parentNode.replaceChild(this.child, this.hook);
             this.self().kill()
         } else if(this.child) {
             const hook = tree.querySelector(`[akkohook="${this.akkomponent.identifier}"]`);
-            if(hook)
+            if(hook) {
                 hook.parentNode.replaceChild(this.child, hook);
+            }
             this.self().kill()
         }
     }
