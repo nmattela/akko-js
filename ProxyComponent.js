@@ -251,15 +251,7 @@ class CompositeComponentDelegator extends akkajs.Actor {
                 publicInstance.componentWillMount();
 
                 const mounted = renderedComponent.mount();
-
-                if(Array.isArray(mounted)) {
-                    const nodesFragment = document.createDocumentFragment();
-                    mounted.forEach(mount => nodesFragment.appendChild(mount));
-                    placeholder.getHostNode().replaceWith(nodesFragment);
-                } else {
-                    placeholder.getHostNode().replaceWith(mounted);
-                }
-
+                placeholder.getHostNode().replaceWith(mounted);
 
                 publicInstance.componentDidMount();
             }
@@ -352,8 +344,8 @@ class DOMComponent extends ProxyComponent{
         Object.keys(nextProps).forEach(propName => node.setAttribute(propName, nextProps[propName]));
 
         /*Get the children. Children can be null when it is a self-closing tag. If that's the case just return an empty array*/
-        const prevChildren = prevElement.children.flat() || [];
-        const nextChildren = nextElement.children.flat() || [];
+        const prevChildren = prevElement.children || [];
+        const nextChildren = nextElement.children || [];
 
         /*Collect the current children and create an empty array where we will store all the new children*/
         const prevRenderedChildren = this.renderedChildren;
@@ -370,8 +362,9 @@ class DOMComponent extends ProxyComponent{
             /*ProxyComponent of the current child*/
             const prevRenderedChild = prevRenderedChildren[i];
 
-            if(!prevRenderedChild) {
+            if(prevRenderedChild === undefined || prevChild === undefined) {
                 /*If the ProxyComponent does not exist (index out of range), the child should be added*/
+
                 const nextRenderedChild = instantiateComponent(nextChild);
                 const node = nextRenderedChild.mount();
 
@@ -389,7 +382,7 @@ class DOMComponent extends ProxyComponent{
                 nextRenderedChildren.push(nextRenderedChild);
             } else {
                 /*It's the same, continue looking for potential differences deeper in the tree*/
-                prevRenderedChild.receive(nextChild, this.node);
+                prevRenderedChild.receive(nextChild);
                 nextRenderedChildren.push(prevRenderedChild);
             }
         }
@@ -477,21 +470,27 @@ class ArrayProxyComponent extends ProxyComponent {
     mount() {
         const elements = this.currentElement;
 
-        const renderedElements = elements.flatMap(instantiateComponent);
+        let renderedElements = elements.flatMap(instantiateComponent);
 
-        if(renderedElements.length !== 0) {
-            this.renderedElements = renderedElements
-        } else {
+        if(renderedElements.length === 0) {
             const placeholder = instantiateComponent({elementName: 'empty', attributes: {}, children: []});
             this.renderedElements = [placeholder]
+        } else {
+            this.renderedElements = renderedElements
         }
 
-        return this.renderedElements.map(renderedElement => renderedElement.mount());
+        const mounted = this.renderedElements.map(renderedElement => renderedElement.mount());
+        const nodesFragment = document.createDocumentFragment();
+        mounted.forEach(mount => nodesFragment.appendChild(mount));
+
+        return nodesFragment
     }
 
     receive(nextElements) {
-
         let reference = this.renderedElements[0];
+
+        if(nextElements.some(nextElement => nextElement.attributes.key === undefined))
+            console.warn(`Keys for the anonymous array of ${nextElements[0].elementName.name} components are not provided. Please provide a unique key for every instance to keep their states saved.`);
 
         /*Unmount all the rendered elements without a key attribute and those with a key attribute that no longer appears in the next elements*/
         const prevRenderedElements = this.renderedElements.filter((renderedElement, i) => {
@@ -514,6 +513,8 @@ class ArrayProxyComponent extends ProxyComponent {
             }
         });
 
+
+
         /*Diff the nextRenderedElements with the remaining prevRenderedElements and add all new ones*/
         const nextRenderedElements = nextElements.reduce((arr, nextElement, i) => {
             if(nextElement.attributes.key !== undefined) {
@@ -527,20 +528,12 @@ class ArrayProxyComponent extends ProxyComponent {
             const nextNode = nextRenderedElement.mount();
             const sibling = arr[i - 1];
 
-            let actualNextNode;
-            if(Array.isArray(nextNode)) {
-                actualNextNode = document.createDocumentFragment();
-                nextNode.forEach(mount => actualNextNode.appendChild(mount));
-            } else {
-                actualNextNode = nextNode
-            }
-
             if(sibling) {
-                sibling.getHostNode().after(actualNextNode);
+                sibling.getHostNode().after(nextNode);
             } else if(reference.currentElement.elementName === 'empty') {
-                reference.getHostNode().replaceWith(actualNextNode);
+                reference.getHostNode().replaceWith(nextNode);
             } else {
-                reference.getHostNode().before(actualNextNode);
+                reference.getHostNode().before(nextNode);
             }
 
             return [...arr, nextRenderedElement]
