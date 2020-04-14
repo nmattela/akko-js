@@ -145,7 +145,10 @@ class SyncCompositeComponent extends CompositeComponent {
 
 
         /*Create an instance and pass the props*/
-        const publicInstance = new type(props);
+        const publicInstance = new type({
+            ...props,
+            proxy: this
+        });
 
         /*Render the element*/
         const renderedElement = publicInstance.render();
@@ -189,7 +192,7 @@ class AsyncCompositeComponent extends CompositeComponent {
     constructor(element) {
         super(element);
 
-        this.actor = system.spawn(new CompositeComponentDelegator(this))
+        this.actor = system.spawn(new CompositeComponentDelegator(this));
     }
 
 
@@ -203,9 +206,12 @@ class AsyncCompositeComponent extends CompositeComponent {
 
 
         /*Create an instance and pass the props*/
-        const publicInstance = new type(props);
+        const publicInstance = new type({
+            ...props,
+            proxy: this
+        });
         /*We need a placeholder for the to-be-rendered AsyncComponent. Use either the old node or create a new empty node*/
-        const placeholder = instantiateComponent({elementName: 'div', attributes: {}, children: []});
+        const placeholder = instantiateComponent(publicInstance.placeholder);
 
         publicInstance.componentIsPlaceheld();
 
@@ -279,6 +285,25 @@ class DOMComponent extends ProxyComponent{
         return this.node;
     }
 
+    setAttributes(prevProps, nextProps) {
+        /*Remove old attributes*/
+        Object.keys(prevProps).forEach(propName => {
+            if(!nextProps.hasOwnProperty(propName))
+                if(/^on/.test(propName))
+                    this.node.removeEventListener(propName.toLowerCase().replace('on', ''), nextProps[propName]);
+                else
+                    this.node.removeAttribute(propName, nextProps[propName])
+        });
+        /*Set new attributes*/
+        Object.keys(nextProps).forEach(propName => {
+            if(!prevProps.hasOwnProperty(propName))
+                if(/^on/.test(propName))
+                    this.node.addEventListener(propName.toLowerCase().replace('on', ''), nextProps[propName]);
+                else
+                    this.node.setAttribute(propName, nextProps[propName])
+        });
+    }
+
     mount() {
         /*The JSX object*/
         const element  = this.currentElement;
@@ -293,13 +318,7 @@ class DOMComponent extends ProxyComponent{
         /*Save this node*/
         this.node  = node;
 
-        /*For all the properties, assign them as HTML attributes, and rename any onX events to their HTML counterparts (onClick -> click, etc.)*/
-        Object.keys(props).forEach(propName => {
-            if(/^on/.test(propName))
-                node.addEventListener(propName.toLowerCase().replace('on', ''), props[propName]);
-            else
-                node.setAttribute(propName, props[propName])
-        });
+        this.setAttributes({}, props);
 
         /*For every child, create their ProxyComponent and save them*/
         const renderedChildren = children.flatMap(instantiateComponent);
@@ -334,14 +353,7 @@ class DOMComponent extends ProxyComponent{
         const nextProps = nextElement.attributes;
         this.currentElement = nextElement;
 
-        /*Remove old attributes*/
-        Object.keys(prevProps).forEach(propName => {
-            if (!nextProps.hasOwnProperty(propName)) {
-                node.removeAttribute(propName);
-            }
-        });
-        /*Set new attributes*/
-        Object.keys(nextProps).forEach(propName => node.setAttribute(propName, nextProps[propName]));
+        this.setAttributes(prevProps, nextProps);
 
         /*Get the children. Children can be null when it is a self-closing tag. If that's the case just return an empty array*/
         const prevChildren = prevElement.children || [];

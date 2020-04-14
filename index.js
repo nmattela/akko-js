@@ -10,7 +10,10 @@ class Akkomponent {
         this.initState({});
 
         /*Creates an empty props object.*/
-        this.props = props;
+        this.props = Object.fromEntries(Object.entries(props).filter(prop => prop[0] !== "proxy"));
+
+        /*Gets the ProxyComponent*/
+        this.proxy = props.proxy
     }
 
     initState(state) {
@@ -18,7 +21,7 @@ class Akkomponent {
             /* When a new value is set, update is called. */
             set: (obj, prop, value) => {
                 obj[prop] = value;
-                return Akko.update();
+                return Akko.update(this);
             }})
     };
 
@@ -63,6 +66,7 @@ export class AsyncComponent extends Akkomponent {
         super(props);
 
         this.actor = system.spawn(new AsyncComponentDelegator(this))
+        this.placeholder = {elementName: 'div', attributes: {}, children: []}
     }
 
     componentIsPlaceheld() {
@@ -88,7 +92,10 @@ class AsyncComponentDelegator extends akkajs.Actor {
         switch(call.method) {
             case 'receive': {
                 this.akkomponent.props = call.props;
-                this.sender().tell({method: 'receive', nextRenderedElement: await this.akkomponent.render()});
+                this.sender().tell({
+                    method: 'receive',
+                    nextRenderedElement: await this.akkomponent.render()
+                });
                 break;
             }
             case 'mount': {
@@ -106,50 +113,30 @@ class AsyncComponentDelegator extends akkajs.Actor {
 
 /**@export main object to be used for initial mounting of the app to the DOM*/
 const Akko = {
-    element: null,
-    containerNode: null,
     mount: (element, containerNode) => {
-
-        /*Save root and containing node for later use*/
-        Akko.element = element;
-        Akko.containerNode = containerNode;
-
         const rootComponent = instantiateComponent(element);
         const node = rootComponent.mount();
 
         containerNode.appendChild(node);
-        node._internalInstance = rootComponent;
 
         return rootComponent.getPublicInstance();
     },
-    unmount: containerNode => {
-        const node = containerNode.firstChild;
-        const rootComponent = node._internalInstance;
+    update: component => {
+        const rendered = component.render();
+        component.proxy.receive(rendered);
 
-        rootComponent.unmount();
-        containerNode.innerHTML = '';
-    },
-    update: () => {
-        const prevNode = Akko.containerNode.firstChild;
-        if(prevNode) {
-            /*If there's already something mounted*/
-            const prevRootComponent = prevNode._internalInstance;
-            const prevElement = prevRootComponent.currentElement;
-
-            /*Do a quick diff.*/
-            if(prevElement.elementName === Akko.element.elementName) {
-                /*If the types are the same, propagate an update down the DOM tree*/
-                prevRootComponent.receive(Akko.element);
-            } else {
-                /*Otherwise, wipe out what's currently mounted and mount again*/
-                this.unmount(Akko.containerNode);
-                Akko.mount(Akko.element, Akko.containerNode)
-            }
-            return true;
-        } else {
-            return false;
-        }
+        return true;
     }
 };
 
 export default Akko;
+
+
+/*
+* Praat over CRUIMel (recap) en async CRUIMel + actors
+* Dan zeggen hoe je het implementeerd
+* Regels van hoe componenten gemaakt worden en hoe die geimplementeerd zijn
+* Regels over wat wel en niet kan
+* Hoeft geen code van mijn implementatie te laten zien
+* Future work (wat ik nog ga doen, web workers, per instatie asynchroon kunnen maken, implementatie in React)
+* */

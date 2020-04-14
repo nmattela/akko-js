@@ -1,5 +1,5 @@
 {
-  "name": "@nmattela/akko",
+  "name": "akko-js",
   "version": "1.0.0",
   "description": "Akko.js: The Actor-Based Reactive Web Framework",
   "main": "index.js",
