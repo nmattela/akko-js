@@ -61,7 +61,7 @@ class ProxyComponent {
 /**@class CompositeComponent
  * This is the proxy for an Akkomponent. An Akkomponent is for our purposes a collection of DOM nodes.
  * */
-class CompositeComponent extends ProxyComponent{
+export class CompositeComponent extends ProxyComponent{
     constructor(element) {
         super(element);
 
@@ -192,7 +192,11 @@ class AsyncCompositeComponent extends CompositeComponent {
     constructor(element) {
         super(element);
 
-        this.actor = system.spawn(new CompositeComponentDelegator(this));
+        this.worker = new Worker('CompositeComponentDelegator.worker.js');
+        this.worker.postMessage({
+            method: 'init',
+            compositeComponent: JSON.parse(JSON.stringify(this))
+        });
     }
 
 
@@ -217,51 +221,19 @@ class AsyncCompositeComponent extends CompositeComponent {
 
         this.renderedComponent = placeholder;
 
+        publicInstance.worker.onmessage = msg => this.worker.postMessage(msg);
+
         /*Tell our actor we are going to mount and provide the placeholder where it should be mounted to*/
-        publicInstance.actor.tell({method: 'mount', placeholder: placeholder}, this.actor);
+        publicInstance.worker.postMessage({method: 'mount', placeholder: placeholder});
+        //publicInstance.actor.tell({method: 'mount', placeholder: placeholder}, this.actor);
 
         return placeholder.mount();
     }
 
     receive(nextElement) {
         this.publicInstance.componentWillUpdate(nextElement.attributes, this.publicInstance.state);
-        this.publicInstance.actor.tell({method: 'receive', props: nextElement.attributes}, this.actor);
-    }
-}
-
-/**@actor CompositeComponentDelegator
- * Simply calls diff when AsyncComponentDelegator returned the result from calling render()
- * */
-class CompositeComponentDelegator extends akkajs.Actor {
-    constructor(compositeComponent) {
-        super();
-
-        this.compositeComponent = compositeComponent;
-        this.receive = this.receive.bind(this);
-    }
-
-    receive(call) {
-        switch(call.method) {
-            case 'receive': {
-                const publicInstance = this.compositeComponent.publicInstance;
-                publicInstance.componentDidUpdate(publicInstance.props, publicInstance.state);
-                this.compositeComponent.diff(call.nextRenderedElement);
-                break;
-            }
-            case 'mount': {
-                const {renderedElement, publicInstance, placeholder} = call;
-                this.compositeComponent.publicInstance = publicInstance;
-                const renderedComponent = instantiateComponent(renderedElement);
-                this.compositeComponent.renderedComponent = renderedComponent;
-
-                publicInstance.componentWillMount();
-
-                const mounted = renderedComponent.mount();
-                placeholder.getHostNode().replaceWith(mounted);
-
-                publicInstance.componentDidMount();
-            }
-        }
+        this.publicInstance.worker.postMessage({method: 'receive', props: nextElement.attributes});
+        //this.publicInstance.actor.tell({method: 'receive', props: nextElement.attributes}, this.actor);
     }
 }
 
