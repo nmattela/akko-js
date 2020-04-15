@@ -65,12 +65,7 @@ export class AsyncComponent extends Akkomponent {
     constructor(props) {
         super(props);
 
-        this.worker = new Worker('AsyncComponentDelegator.worker.js');
-        this.worker.postMessage({
-            method: 'init',
-            akkomponent: JSON.parse(JSON.stringify(this))
-        });
-
+        this.actor = system.spawn(new AsyncComponentDelegator(this))
         this.placeholder = {elementName: 'div', attributes: {}, children: []}
     }
 
@@ -80,6 +75,39 @@ export class AsyncComponent extends Akkomponent {
 
     async render() {
         return null;
+    }
+}
+
+/**@actor AsyncComponentDelegator
+ * */
+class AsyncComponentDelegator extends akkajs.Actor {
+    constructor(akkomponent) {
+        super();
+
+        this.akkomponent = akkomponent;
+        this.receive = this.receive.bind(this);
+    }
+
+    async receive(call) {
+        switch(call.method) {
+            case 'receive': {
+                this.akkomponent.props = call.props;
+                this.sender().tell({
+                    method: 'receive',
+                    nextRenderedElement: await this.akkomponent.render()
+                });
+                break;
+            }
+            case 'mount': {
+                this.sender().tell({
+                    method: 'mount',
+                    renderedElement: await this.akkomponent.render(),
+                    publicInstance: this.akkomponent,
+                    placeholder: call.placeholder
+                });
+                break;
+            }
+        }
     }
 }
 
@@ -102,3 +130,13 @@ const Akko = {
 };
 
 export default Akko;
+
+
+/*
+* Praat over CRUIMel (recap) en async CRUIMel + actors
+* Dan zeggen hoe je het implementeerd
+* Regels van hoe componenten gemaakt worden en hoe die geimplementeerd zijn
+* Regels over wat wel en niet kan
+* Hoeft geen code van mijn implementatie te laten zien
+* Future work (wat ik nog ga doen, web workers, per instatie asynchroon kunnen maken, implementatie in React)
+* */
