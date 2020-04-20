@@ -1,6 +1,6 @@
 {
   "name": "akko-js",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Akko.js: The Actor-Based Reactive Web Framework",
   "main": "index.js",
   "scripts": {
@@ -10,7 +10,9 @@
   "author": "Nicolas Mattelaer",
   "license": "ISC",
   "dependencies": {
-    "akkajs": "^1.0.1"
+    "akkajs": "^1.0.1",
+    "geteventlisteners": "^1.1.0",
+    "inline-web-worker": "^1.1.0"
   },
   "devDependencies": {},
   "repository": {
