@@ -48,7 +48,7 @@ class Akkomponent {
         return null;
     }
 
-    render() {
+    render(state, props) {
         return null;
     }
 }
@@ -57,10 +57,21 @@ export class SyncComponent extends Akkomponent {
     constructor(props) {
         super(props);
     }
-
 }
 
-export class AsyncComponent extends akkajs.Actor {
+export class AsyncComponent extends Akkomponent {
+    constructor(props) {
+        super(props);
+
+        this.placeholder = {elementName: 'div', attributes: {}, children: []};
+    }
+
+    componentIsPlaceheld() {
+        return null;
+    }
+}
+
+/*export class AsyncComponent extends akkajs.Actor {
     constructor(props) {
         super();
 
@@ -102,6 +113,8 @@ export class AsyncComponent extends akkajs.Actor {
                         const fn = call.event.fn;
                         const arg = call.event.arg;
 
+                        console.log(JSON.stringify(this));
+
                         $worker().create(msg => {
                             const {fn, arg} = JSON.parse(msg.data);
                             const actualFun = eval(fn);
@@ -126,7 +139,7 @@ export class AsyncComponent extends akkajs.Actor {
 
     initState(state) {
         this.state = new Proxy(state, {
-            /* When a new value is set, update is called. */
+            /!* When a new value is set, update is called. *!/
             set: (obj, prop, value) => {
                 obj[prop] = value;
                 return Akko.update(this);
@@ -164,7 +177,7 @@ export class AsyncComponent extends akkajs.Actor {
     async render() {
         return null;
     }
-}
+}*/
 
 class UpdateCycleActor extends akkajs.Actor {
     constructor() {

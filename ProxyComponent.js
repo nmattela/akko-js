@@ -1,6 +1,7 @@
 import akkajs from 'akkajs';
 import {AsyncComponent, SyncComponent, system} from "./index";
 import 'geteventlisteners';
+import $worker from 'inline-web-worker';
 
 /**
  * Code based on the React Implementation Notes https://reactjs.org/docs/implementation-notes.html
@@ -44,7 +45,7 @@ class ProxyComponent {
      *
      * @param actor {Actor}
      * */
-    mount(actor) {
+    mount() {
         return null;
     }
 
@@ -59,7 +60,7 @@ class ProxyComponent {
      * @param actor {Actor}
      *
      * */
-    receive(nextElement, actor) {
+    receive(nextElement) {
         return null;
     }
 }
@@ -86,17 +87,17 @@ class CompositeComponent extends ProxyComponent{
     }
 
     /**@method Compare differences between old and new element, and replace if necessary*/
-    diff(nextRenderedElement, actor) {
+    diff(nextRenderedElement) {
         /*The ProxyComponent returned from our render method*/
         const prevRenderedComponent = this.renderedComponent;
         /*The JSX object of our rendered ProxyComponent*/
         const prevRenderedElement = prevRenderedComponent.currentElement;
 
         if(Array.isArray(prevRenderedElement)) {
-            prevRenderedComponent.receive(nextRenderedElement, actor)
+            prevRenderedComponent.receive(nextRenderedElement)
         } else if(prevRenderedElement.elementName === nextRenderedElement.elementName) {
             /*If the element names are the same, there is no need to remount the current DOM subtree*/
-            prevRenderedComponent.receive(nextRenderedElement, actor);
+            prevRenderedComponent.receive(nextRenderedElement);
         } else {
             /*Otherwise, we should remount it*/
             /*Gets the node currently inside the DOM tree*/
@@ -106,7 +107,7 @@ class CompositeComponent extends ProxyComponent{
             prevRenderedComponent.unmount();
             /*Create a new ProxyComponent for the new result of calling render and mount it*/
             const nextRenderedComponent = instantiateComponent(nextRenderedElement);
-            const nextNode = nextRenderedComponent.mount(actor);
+            const nextNode = nextRenderedComponent.mount();
 
             this.renderedComponent = nextRenderedComponent;
 
@@ -117,14 +118,13 @@ class CompositeComponent extends ProxyComponent{
 
     /**@abstract
      *
-     * @param actor {Actor}
      * */
-    mount(actor) {
+    mount() {
         return null;
     }
 
     /**@abstract*/
-    receive(nextElement, actor) {
+    receive(nextElement) {
         return null;
     }
 
@@ -144,7 +144,7 @@ class SyncCompositeComponent extends CompositeComponent {
         super(element);
     }
 
-    mount(actor) {
+    mount() {
         /*Our JSX object*/
         const element = this.currentElement;
         /*The type of our component, which will be a class*/
@@ -171,10 +171,10 @@ class SyncCompositeComponent extends CompositeComponent {
 
         publicInstance.componentWillMount();
         /*We return our subtree of HTML DOM nodes by recursively calling mount on our children*/
-        return renderedComponent.mount(actor);
+        return renderedComponent.mount();
     }
 
-    receive(nextElement, actor) {
+    receive(nextElement) {
         /*Get our instance of the Akkomponent*/
         const publicInstance = this.publicInstance;
 
@@ -193,20 +193,17 @@ class SyncCompositeComponent extends CompositeComponent {
         publicInstance.componentDidUpdate(oldProps, oldState);
 
         /*Now diff the two versions to see if anything changed*/
-        this.diff(nextRenderedElement, actor);
+        this.diff(nextRenderedElement);
     }
 }
 
 class AsyncCompositeComponent extends CompositeComponent {
     constructor(element) {
         super(element);
-
-        this.publicInstanceActor = null;
-        this.actor = system.spawn(new CompositeComponentDelegator(this));
     }
 
 
-    mount(actor) {
+    mount() {
         /*Our JSX object*/
         const element = this.currentElement;
         /*The type of our component, which will be a class*/
@@ -221,8 +218,6 @@ class AsyncCompositeComponent extends CompositeComponent {
             proxy: this
         });
 
-        this.publicInstanceActor = system.spawn(this.publicInstance);
-
         /*We need a placeholder for the to-be-rendered AsyncComponent. Use either the old node or create a new empty node*/
         const placeholder = instantiateComponent(this.publicInstance.placeholder);
 
@@ -232,15 +227,45 @@ class AsyncCompositeComponent extends CompositeComponent {
 
         /*Tell our actor we are going to mount and provide the placeholder where it should be mounted to*/
         //publicInstance.actor.tell({method: 'mount', placeholder: placeholder, actor: publicInstance.actor}, this.actor);
-        this.publicInstanceActor.tell({method: 'mount', placeholder: placeholder, actor: this.publicInstanceActor}, this.actor);
+        //this.publicInstanceActor.tell({method: 'mount', placeholder: placeholder, actor: this.publicInstanceActor}, this.actor);
 
-        return placeholder.mount(this.actor);
+
+        $worker()
+            .create(msg => {
+                const {render, state, props} = JSON.parse(msg.data);
+                console.log(state, props)
+                const evalRender = eval(render);
+                console.log(evalRender)
+                const result = evalRender(state, props);
+                console.log(result)
+                self.postMessage(result);
+            })
+            .run(JSON.stringify({
+                render: `(state, props) => ${this.publicInstance.render.toString().slice(this.publicInstance.render.toString().indexOf("{") - 1, this.publicInstance.render.toString().lastIndexOf("}") + 1)}`,
+                state: this.publicInstance.state,
+                props: props
+            }))
+            .then(msg => {
+                const renderedElement = msg.data;
+
+                const renderedComponent = instantiateComponent(renderedElement);
+                this.renderedComponent = renderedComponent;
+
+                this.publicInstance.componentWillMount();
+
+                const mounted = renderedComponent.mount();
+                placeholder.getHostNode().replaceWith(mounted);
+
+                this.publicInstance.componentDidMount();
+            });
+
+        return placeholder.mount();
     }
 
-    receive(nextElement, actor) {
+    receive(nextElement) {
         console.log(`Async received: `, nextElement)
         this.publicInstance.componentWillUpdate(nextElement.attributes, this.publicInstance.state);
-        this.publicInstanceActor.tell({method: 'receive', props: nextElement.attributes, actor: this.publicInstanceActor}, this.actor);
+        //this.publicInstanceActor.tell({method: 'receive', props: nextElement.attributes, actor: this.publicInstanceActor}, this.actor);
     }
 }
 
@@ -260,7 +285,7 @@ class CompositeComponentDelegator extends akkajs.Actor {
             case 'receive': {
                 const publicInstance = this.compositeComponent.publicInstance;
                 publicInstance.componentDidUpdate(publicInstance.props, publicInstance.state);
-                this.compositeComponent.diff(call.nextRenderedElement, call.actor);
+                this.compositeComponent.diff(call.nextRenderedElement);
                 break;
             }
             case 'mount': {
@@ -270,7 +295,7 @@ class CompositeComponentDelegator extends akkajs.Actor {
 
                 this.compositeComponent.publicInstance.componentWillMount();
 
-                const mounted = renderedComponent.mount(call.actor);
+                const mounted = renderedComponent.mount();
                 placeholder.getHostNode().replaceWith(mounted);
 
                 this.compositeComponent.publicInstance.componentDidMount();
@@ -304,7 +329,7 @@ class DOMComponent extends ProxyComponent{
         return this.node;
     }
 
-    setAttributes(prevProps, nextProps, actor) {
+    setAttributes(prevProps, nextProps) {
         /*Remove old attributes*/
         Object.keys(prevProps).forEach(propName => {
             if(!nextProps.hasOwnProperty(propName))
@@ -319,7 +344,7 @@ class DOMComponent extends ProxyComponent{
         Object.keys(nextProps).forEach(propName => {
             if(!prevProps.hasOwnProperty(propName))
                 if(/^on/.test(propName)) {
-                    this.node.addEventListener(propName.toLowerCase().replace('on', ''), actor ? () => actor.tell({method: 'event', event: nextProps[propName]}) : nextProps[propName]);
+                    this.node.addEventListener(propName.toLowerCase().replace('on', ''), nextProps[propName]);
                 }
                 else
                     this.node.setAttribute(propName, nextProps[propName])
@@ -335,7 +360,7 @@ class DOMComponent extends ProxyComponent{
                         const type = key.toLowerCase().replace('on', '');
                         const eventListeners = this.node.getEventListeners(type);
                         eventListeners.forEach(eventListener => this.node.removeEventListener(type, eventListener.listener));
-                        this.node.addEventListener(key.toLowerCase().replace('on', ''), actor ? () => actor.tell({method: 'event', event: nextProps[key]}) : nextProps[key]);
+                        this.node.addEventListener(key.toLowerCase().replace('on', ''), nextProps[key]);
                     } else {
                         this.node.removeAttribute(key, prevValue);
                         this.node.setAttribute(key, nextValue);
@@ -345,7 +370,7 @@ class DOMComponent extends ProxyComponent{
         })
     }
 
-    mount(actor) {
+    mount() {
         /*The JSX object*/
         const element  = this.currentElement;
         /*The type (div, button, ...) of the HTML node*/
@@ -359,14 +384,14 @@ class DOMComponent extends ProxyComponent{
         /*Save this node*/
         this.node  = node;
 
-        this.setAttributes({}, props, actor);
+        this.setAttributes({}, props);
 
         /*For every child, create their ProxyComponent and save them*/
         const renderedChildren = children.flatMap(instantiateComponent);
         this.renderedChildren  = renderedChildren;
 
         /*Every child should return HTML nodes and each of these children should be mounted to the DOM*/
-        const childNodes = renderedChildren.map(child => child.mount(actor));
+        const childNodes = renderedChildren.map(child => child.mount());
         childNodes.flat().forEach(childNode => {
             node.appendChild(childNode);
         });
@@ -385,7 +410,7 @@ class DOMComponent extends ProxyComponent{
         //this.node.remove();
     }
 
-    receive(nextElement, actor) {
+    receive(nextElement) {
         /*Our current HTML subtree*/
         const node = this.node;
         /*Our current JSX object*/
@@ -396,7 +421,7 @@ class DOMComponent extends ProxyComponent{
         const nextProps = nextElement.attributes;
         this.currentElement = nextElement;
 
-        this.setAttributes(prevProps, nextProps, actor);
+        this.setAttributes(prevProps, nextProps);
 
         /*Get the children. Children can be null when it is a self-closing tag. If that's the case just return an empty array*/
         const prevChildren = prevElement.children || [];
@@ -421,7 +446,7 @@ class DOMComponent extends ProxyComponent{
                 /*If the ProxyComponent does not exist (index out of range), the child should be added*/
 
                 const nextRenderedChild = instantiateComponent(nextChild);
-                const node = nextRenderedChild.mount(actor);
+                const node = nextRenderedChild.mount();
 
                 operationQueue.push({type: 'ADD', node});
                 nextRenderedChildren.push(nextRenderedChild);
@@ -431,13 +456,13 @@ class DOMComponent extends ProxyComponent{
                 prevRenderedChild.unmount();
 
                 const nextRenderedChild = instantiateComponent(nextChild);
-                const nextNode = nextRenderedChild.mount(actor);
+                const nextNode = nextRenderedChild.mount();
 
                 operationQueue.push({type: 'REPLACE', prevNode, nextNode});
                 nextRenderedChildren.push(nextRenderedChild);
             } else {
                 /*It's the same, continue looking for potential differences deeper in the tree*/
-                prevRenderedChild.receive(nextChild, actor);
+                prevRenderedChild.receive(nextChild);
                 nextRenderedChildren.push(prevRenderedChild);
             }
         }
@@ -489,7 +514,7 @@ class InnerHTMLComponent extends ProxyComponent {
         return this.innerHTML
     }
 
-    mount(actor) {
+    mount() {
         /*Simply create a text node*/
         this.innerHTML = document.createTextNode(this.currentElement);
         return this.innerHTML
@@ -500,7 +525,7 @@ class InnerHTMLComponent extends ProxyComponent {
         return null;
     }
 
-    receive(nextElement, actor) {
+    receive(nextElement) {
         /*Do nothing special since everything should be handled by parent*/
         return null;
     }
@@ -522,7 +547,7 @@ class ArrayProxyComponent extends ProxyComponent {
         return null;
     }
 
-    mount(actor) {
+    mount() {
         const elements = this.currentElement;
 
         let renderedElements = elements.flatMap(instantiateComponent);
@@ -534,14 +559,14 @@ class ArrayProxyComponent extends ProxyComponent {
             this.renderedElements = renderedElements
         }
 
-        const mounted = this.renderedElements.map(renderedElement => renderedElement.mount(actor));
+        const mounted = this.renderedElements.map(renderedElement => renderedElement.mount());
         const nodesFragment = document.createDocumentFragment();
         mounted.forEach(mount => nodesFragment.appendChild(mount));
 
         return nodesFragment
     }
 
-    receive(nextElements, actor) {
+    receive(nextElements) {
         let reference = this.renderedElements[0];
 
         if(nextElements.some(nextElement => nextElement.attributes.key === undefined))
@@ -559,7 +584,7 @@ class ArrayProxyComponent extends ProxyComponent {
                 return false;
             } else {
                 const newReference = instantiateComponent({elementName: 'empty', attributes: {}, children: []});
-                const newReferenceMounted = newReference.mount(actor);
+                const newReferenceMounted = newReference.mount();
 
                 reference.getHostNode().replaceWith(newReferenceMounted);
                 reference = newReference;
@@ -575,12 +600,12 @@ class ArrayProxyComponent extends ProxyComponent {
             if(nextElement.attributes.key !== undefined) {
                 const prevRenderedElement = prevRenderedElements.find(prevRenderedElement => prevRenderedElement.currentElement.attributes.key === nextElement.attributes.key)
                 if(prevRenderedElement) {
-                    prevRenderedElement.receive(nextElement, actor);
+                    prevRenderedElement.receive(nextElement);
                     return [...arr, prevRenderedElement]
                 }
             }
             const nextRenderedElement = instantiateComponent(nextElement);
-            const nextNode = nextRenderedElement.mount(actor);
+            const nextNode = nextRenderedElement.mount();
             const sibling = arr[i - 1];
 
             if(sibling) {
