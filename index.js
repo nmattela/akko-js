@@ -1,18 +1,24 @@
-import instantiateComponent from "./ProxyComponent";
+import instantiateManager from "./Managers";
 import akkajs from "akkajs";
 import $worker from 'inline-web-worker';
 
 export const system = akkajs.ActorSystem.create();
 
-/** @class (abstract) Main component class, inherited by SyncComponent and AsyncComponent */
-class Akkomponent {
+/** @class SyncComponent
+ * Akkomponents are called composite components in the paper. I chose this name because composite components
+ * are rather verbose.
+ *
+ * This class serves as the main class inherited by SyncComponent */
+export class SyncComponent {
     constructor(props) {
         /*Creates an empty state object.*/
         this.initState({});
 
-        this.props = Object.fromEntries(Object.entries(props).filter(([key, value]) => key !== "proxy"));
+        /*Extract the provided proxy object from the props*/
+        this.props = props;
 
-        this.proxy = props.proxy;
+        /*Still needs to be provided*/
+        this.proxy = null
     }
 
     initState(state) {
@@ -53,13 +59,13 @@ class Akkomponent {
     }
 }
 
-export class SyncComponent extends Akkomponent {
-    constructor(props) {
-        super(props);
-    }
 
-}
-
+/**@class AsyncComponent
+ *
+ * This is very similar to SyncComponent, except that it extends akkajs.Actor. Hence, lots of code duplication had to be
+ * done due to the lack of interfaces in plain JavaScript
+ *
+ * */
 export class AsyncComponent extends akkajs.Actor {
     constructor(props) {
         super();
@@ -75,6 +81,7 @@ export class AsyncComponent extends akkajs.Actor {
         this.receive = this.receive.bind(this);
     }
 
+    /*Handles all incoming messages*/
     async receive(call) {
         switch (call.method) {
             case "mount": {
@@ -96,34 +103,43 @@ export class AsyncComponent extends akkajs.Actor {
                 break;
             }
             case "event": {
-
-                switch(typeof call.event) {
+                const event = call.event;
+                switch(typeof event) {
+                    //If object, then the special syntax to use Web Workers is requested
                     case "object": {
-                        const fn = call.event.fn;
-                        const arg = call.event.arg;
 
+                        //Warning! This code is very ugly and at best experimental
+                        const fn = event.fn;
+                        const arg = event.arg;
+
+                        /*Create an inline worker that gets the function with its arguments, deserializes them, executes
+                        * them and returns the result.
+                        * */
                         $worker().create(msg => {
                             const {fn, arg} = JSON.parse(msg.data);
                             const actualFun = eval(fn);
-                            const actualArgs = JSON.parse(arg)
+                            const actualArgs = JSON.parse(arg);
                             self.postMessage(JSON.stringify(actualFun(actualArgs)))
                         }).run(JSON.stringify({
+                            //Serialize all content to JSON
                             fn: fn.toString(),
                             arg: JSON.stringify(arg)
                         })).then(json => {
                             const newState = JSON.parse(json.data);
+                            /*Assign new value*/
                             Object.entries(newState).forEach(([key, value]) => this.state[key] = value)
                         });
                         break;
                     }
-                    case "function": call.event(); break;
+                    //If function, just execute it
+                    case "function": event(); break;
                 }
-
                 break;
             }
         }
     }
 
+    /*Initializes this.state as a proxy*/
     initState(state) {
         this.state = new Proxy(state, {
             /* When a new value is set, update is called. */
@@ -166,60 +182,87 @@ export class AsyncComponent extends akkajs.Actor {
     }
 }
 
-class UpdateCycleActor extends akkajs.Actor {
+
+/**@class
+ *
+ * Fallback actor, as explained in the paper
+ * It deals with all the events that would otherwise be handled by the (conceptual) main thread
+ * */
+class FallBack extends akkajs.Actor {
+    constructor() {
+        super();
+
+        this.receive = this.receive.bind(this);
+    }
+
+    receive(call) {
+        if(call.method === "event")
+            call.event();
+    }
+}
+
+/**@class Updater
+ *
+ * The special Updater class as explained in the paper
+ * */
+class Updater extends akkajs.Actor {
     constructor() {
         super();
 
         this.receive = this.receive.bind(this);
 
-        this.queue = [];
+        this.buffer = [];
 
         this.cycle = null;
     }
 
     receive(call) {
         switch(call.method) {
+            /*Initializes a interval loop that flushes the buffer every 16 ms (~ 60fps)*/
             case "start": {
                 this.cycle = setInterval(() => {
-                    this.queue.forEach((component, index) => {
+                    this.buffer.forEach((component, index) => {
                         const rendered = component.render();
                         rendered.attributes = component.props;
-                        component.proxy.receive(rendered, null);
+                        component.proxy.receive(rendered, Akko.fallback);
                     });
 
-                    this.queue = [];
+                    this.buffer = [];
                 }, 16);
                 break;
             }
             case "enqueue": {
                 const { component } = call;
-                const alreadyInQueue = this.queue.indexOf(component);
+                const alreadyInQueue = this.buffer.indexOf(component);
 
                 if(alreadyInQueue === -1)
-                    this.queue.push(component);
+                    this.buffer.push(component);
                 else
-                    this.queue[alreadyInQueue] = component;
+                    this.buffer[alreadyInQueue] = component;
                 break;
             }
         }
     }
 }
 
-/**@export main object to be used for initial mounting of the app to the DOM*/
+/**@export main object representing the framework to be used for initial mounting of the app to the DOM*/
 const Akko = {
-    cycle: system.spawn(new UpdateCycleActor()),
-    mount: (element, containerNode) => {
-        const rootComponent = instantiateComponent(element);
-        const node = rootComponent.mount(null);
-        containerNode.appendChild(node);
+    SyncComponent: SyncComponent,
+    AsyncComponent: AsyncComponent,
+    updater: system.spawn(new Updater()),
+    fallback: system.spawn(new FallBack()),
+    mount: (rootComponent, rootNode) => {
+        const rootManager = instantiateManager(rootComponent);
+        const node = rootManager.mount(Akko.fallback);
+        rootNode.appendChild(node);
 
-        Akko.cycle.tell({method: 'start'})
+        Akko.updater.tell({method: 'start'});
 
-        return rootComponent.getPublicInstance();
+        return rootManager.getPublicInstance();
     },
     update: component => {
 
-        Akko.cycle.tell({method: 'enqueue', component});
+        Akko.updater.tell({method: 'enqueue', component});
 
         return true;
     }

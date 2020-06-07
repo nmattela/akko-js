@@ -9,14 +9,14 @@ import 'geteventlisteners';
  * It is based on Paul O'Shannessy's "Building React from Scratch" talk
  * */
 
-/** @class ProxyComponent (abstract)
- * The Proxy Component serves as a representation for Akkomponents and HTML DOM nodes in the backend of the library, hidden from the user.
+/** @class Manager (abstract)
+ * The Manager serves as the representer for components in the backend of the library, hidden from the user.
  * It manages information such as:
  * - The current element (The object returned from _jsx)
- * - The ProxyComponent that we received as result from the Akkomponent's render method
- * - The instance of the Akkomponent
+ * - The Manager of the child components for composite components
+ * - The instance of a composite component
  * */
-class ProxyComponent {
+class Manager {
     constructor(element) {
         /**@property {object | string | number} Stores a JSX object or a piece of innerHTML
          *
@@ -30,19 +30,19 @@ class ProxyComponent {
         this.currentElement = element;
     }
 
-    /**@abstract Gets the public instance (Akkomponent instance or DOM node)*/
+    /**@abstract Gets the public instance (composite component instance or DOM node)*/
     getPublicInstance() {
         return null;
     }
 
-    /**@abstract Gets the "platform specific" node (in our case also a DOM node)*/
+    /**@abstract Gets the "platform specific" node (in our case a DOM node)*/
     getHostNode() {
         return null;
     }
 
     /**@abstract Instructions on what to do when mounting the component/DOM node
      *
-     * @param actor {Actor}
+     * @param actor {Actor}: The last seen asynchronous component
      * */
     mount(actor) {
         return null;
@@ -56,7 +56,7 @@ class ProxyComponent {
     /**@abstract Instructions on what to do when receiving an update
      *
      * @param nextElement {object}: A potentially updated JSX object that should be diffed
-     * @param actor {Actor}
+     * @param actor {Actor}: The last seen asynchronous component
      *
      * */
     receive(nextElement, actor) {
@@ -64,16 +64,16 @@ class ProxyComponent {
     }
 }
 
-/**@class CompositeComponent
- * This is the proxy for an Akkomponent. An Akkomponent is for our purposes a collection of DOM nodes.
+/**@class (abstract) CompositeManager
+ * This is the supperclass for both synchronous and asynchronous components
  * */
-class CompositeComponent extends ProxyComponent{
+class CompositeManager extends Manager{
     constructor(element) {
         super(element);
 
-        /**@property The ProxyComponent that we received from our render method*/
+        /**@property The Manager that we received from our render method*/
         this.renderedComponent = null;
-        /**@property The actual Akkomponent instance created during mount*/
+        /**@property The actual composite component instance created during mount*/
         this.publicInstance = null;
     }
 
@@ -87,12 +87,13 @@ class CompositeComponent extends ProxyComponent{
 
     /**@method Compare differences between old and new element, and replace if necessary*/
     diff(nextRenderedElement, actor) {
-        /*The ProxyComponent returned from our render method*/
+        /*The Manager returned from our render method*/
         const prevRenderedComponent = this.renderedComponent;
-        /*The JSX object of our rendered ProxyComponent*/
+        /*The JSX object of our rendered Manager*/
         const prevRenderedElement = prevRenderedComponent.currentElement;
 
         if(Array.isArray(prevRenderedElement)) {
+            /*If prevRenderedComponent is an ArrayManager*/
             prevRenderedComponent.receive(nextRenderedElement, actor)
         } else if(prevRenderedElement.elementName === nextRenderedElement.elementName) {
             /*If the element names are the same, there is no need to remount the current DOM subtree*/
@@ -104,8 +105,8 @@ class CompositeComponent extends ProxyComponent{
 
             /*Unmount the old subtree*/
             prevRenderedComponent.unmount();
-            /*Create a new ProxyComponent for the new result of calling render and mount it*/
-            const nextRenderedComponent = instantiateComponent(nextRenderedElement);
+            /*Create a new Manager for the new result of calling render and mount it*/
+            const nextRenderedComponent = instantiateManager(nextRenderedElement);
             const nextNode = nextRenderedComponent.mount(actor);
 
             this.renderedComponent = nextRenderedComponent;
@@ -117,7 +118,7 @@ class CompositeComponent extends ProxyComponent{
 
     /**@abstract
      *
-     * @param actor {Actor}
+     * @param actor {Actor}: The last seen asynchronous component
      * */
     mount(actor) {
         return null;
@@ -139,7 +140,9 @@ class CompositeComponent extends ProxyComponent{
     }
 }
 
-class SyncCompositeComponent extends CompositeComponent {
+/**@class Manager for a synchronous component
+ * */
+class SyncManager extends CompositeManager {
     constructor(element) {
         super(element);
     }
@@ -155,9 +158,10 @@ class SyncCompositeComponent extends CompositeComponent {
 
         /*Create an instance and pass the props*/
         const publicInstance = new type({
-            ...props,
-            proxy: this
+            ...props
         });
+
+        publicInstance.proxy = this;
 
         /*Render the element*/
         const renderedElement = publicInstance.render();
@@ -165,13 +169,17 @@ class SyncCompositeComponent extends CompositeComponent {
         /*Save the instance*/
         this.publicInstance = publicInstance;
 
-        /*The JSX received from calling our render method will be transformed to a ProxyComponent and saved*/
-        const renderedComponent = instantiateComponent(renderedElement);
-        this.renderedComponent = renderedComponent;
+        if(renderedElement !== null) {
+            /*The JSX received from calling our render method will be transformed to a Manager and saved*/
+            const renderedComponent = instantiateManager(renderedElement);
+            this.renderedComponent = renderedComponent;
 
-        publicInstance.componentWillMount();
-        /*We return our subtree of HTML DOM nodes by recursively calling mount on our children*/
-        return renderedComponent.mount(actor);
+            publicInstance.componentWillMount();
+            /*We return our subtree of HTML DOM nodes by recursively calling mount on our children*/
+            return renderedComponent.mount(actor);
+        } else {
+            return null;
+        }
     }
 
     receive(nextElement, actor) {
@@ -197,12 +205,14 @@ class SyncCompositeComponent extends CompositeComponent {
     }
 }
 
-class AsyncCompositeComponent extends CompositeComponent {
+/**@class Manager for an asynchronous component
+ * */
+class AsyncManager extends CompositeManager {
     constructor(element) {
         super(element);
 
         this.publicInstanceActor = null;
-        this.actor = system.spawn(new CompositeComponentDelegator(this));
+        this.actor = system.spawn(new AsyncManagerDelegator(this));
     }
 
 
@@ -224,7 +234,7 @@ class AsyncCompositeComponent extends CompositeComponent {
         this.publicInstanceActor = system.spawn(this.publicInstance);
 
         /*We need a placeholder for the to-be-rendered AsyncComponent. Use either the old node or create a new empty node*/
-        const placeholder = instantiateComponent(this.publicInstance.placeholder);
+        const placeholder = instantiateManager(this.publicInstance.placeholder);
 
         this.publicInstance.componentIsPlaceheld();
 
@@ -238,16 +248,15 @@ class AsyncCompositeComponent extends CompositeComponent {
     }
 
     receive(nextElement, actor) {
-        console.log(`Async received: `, nextElement)
         this.publicInstance.componentWillUpdate(nextElement.attributes, this.publicInstance.state);
         this.publicInstanceActor.tell({method: 'receive', props: nextElement.attributes, actor: this.publicInstanceActor}, this.actor);
     }
 }
 
-/**@actor CompositeComponentDelegator
- * Simply calls diff when AsyncComponentDelegator returned the result from calling render()
+/**@actor AsyncManagerDelegator
+ * Awaits returning value from the AsyncComponent actor
  * */
-class CompositeComponentDelegator extends akkajs.Actor {
+class AsyncManagerDelegator extends akkajs.Actor {
     constructor(compositeComponent) {
         super();
 
@@ -259,21 +268,39 @@ class CompositeComponentDelegator extends akkajs.Actor {
         switch(call.method) {
             case 'receive': {
                 const publicInstance = this.compositeComponent.publicInstance;
-                publicInstance.componentDidUpdate(publicInstance.props, publicInstance.state);
+                publicInstance.componentDidUpdate(this.compositeComponent.renderedComponent.currentElement.attributes, publicInstance.state);
                 this.compositeComponent.diff(call.nextRenderedElement, call.actor);
                 break;
             }
             case 'mount': {
                 const {renderedElement, placeholder} = call;
-                const renderedComponent = instantiateComponent(renderedElement);
-                this.compositeComponent.renderedComponent = renderedComponent;
+                const publicInstance = this.compositeComponent.publicInstance;
+                const actor = this.compositeComponent.publicInstanceActor;
 
-                this.compositeComponent.publicInstance.componentWillMount();
+                if(renderedElement !== null) {
+                    /*Convert all the functions provided to the rendered element with messages*/
+                    const attributes = Object.fromEntries(
+                        Object.entries(renderedElement.attributes)
+                            .map(([key, value]) => {
+                                if(typeof value === "function")
+                                    return [key, () => actor.tell({method: "event", event: value})];
+                                else
+                                    return [key, value];
+                            })
+                    );
 
-                const mounted = renderedComponent.mount(call.actor);
-                placeholder.getHostNode().replaceWith(mounted);
+                    const renderedComponent = instantiateManager({...renderedElement, attributes});
+                    this.compositeComponent.renderedComponent = renderedComponent;
 
-                this.compositeComponent.publicInstance.componentDidMount();
+                    publicInstance.componentWillMount();
+
+                    const mounted = renderedComponent.mount(call.actor);
+                    placeholder.getHostNode().replaceWith(mounted);
+
+                    publicInstance.componentDidMount();
+                } else {
+                    placeholder.getHostNode().remove();
+                }
                 break;
             }
             case 'event': {
@@ -284,10 +311,10 @@ class CompositeComponentDelegator extends akkajs.Actor {
     }
 }
 
-/**@class DOMComponent
+/**@class PrimitiveManager
  * This is the proxy for a DOM component, such as <div>, <button>, etc.
  * */
-class DOMComponent extends ProxyComponent{
+class PrimitiveManager extends Manager{
     constructor(element) {
         super(element);
         /**@property the ProxyComponents of all its children*/
@@ -361,17 +388,17 @@ class DOMComponent extends ProxyComponent{
 
         this.setAttributes({}, props, actor);
 
-        /*For every child, create their ProxyComponent and save them*/
-        const renderedChildren = children.flatMap(instantiateComponent);
+        /*For every child, create their Manager and save them*/
+        const renderedChildren = children.flatMap(instantiateManager);
         this.renderedChildren  = renderedChildren;
 
         /*Every child should return HTML nodes and each of these children should be mounted to the DOM*/
         const childNodes = renderedChildren.map(child => child.mount(actor));
-        childNodes.flat().forEach(childNode => {
-            node.appendChild(childNode);
-        });
+        childNodes
+            .flat()
+            .forEach(childNode => node.appendChild(childNode));
         renderedChildren.forEach(renderedChild => {
-            if(renderedChild instanceof SyncCompositeComponent)
+            if(renderedChild instanceof SyncManager)
                 renderedChild.getPublicInstance().componentDidMount();
         });
 
@@ -414,23 +441,23 @@ class DOMComponent extends ProxyComponent{
             const nextChild = nextChildren[i];
             /*JSX object of the current child*/
             const prevChild = prevChildren[i];
-            /*ProxyComponent of the current child*/
+            /*Manager of the current child*/
             const prevRenderedChild = prevRenderedChildren[i];
 
             if(prevRenderedChild === undefined || prevChild === undefined) {
-                /*If the ProxyComponent does not exist (index out of range), the child should be added*/
+                /*If the Manager does not exist (index out of range), the child should be added*/
 
-                const nextRenderedChild = instantiateComponent(nextChild);
+                const nextRenderedChild = instantiateManager(nextChild);
                 const node = nextRenderedChild.mount(actor);
 
                 operationQueue.push({type: 'ADD', node});
                 nextRenderedChildren.push(nextRenderedChild);
-            } else if(prevChild.elementName !== nextChild.elementName || (typeof prevChild !== 'object' && typeof nextChild !== 'object' && prevChild !== nextChild)) {
+            } else if(prevChild.elementName !== nextChild.elementName) {
                 /*If the type (elementName) is not the same (e.g. <div> != <span>) or the children are innerHTMLs and they differ (e.g. 'Hello World' != 'Goodbye World')*/
                 const prevNode = prevRenderedChild.getHostNode();
                 prevRenderedChild.unmount();
 
-                const nextRenderedChild = instantiateComponent(nextChild);
+                const nextRenderedChild = instantiateManager(nextChild);
                 const nextNode = nextRenderedChild.mount(actor);
 
                 operationQueue.push({type: 'REPLACE', prevNode, nextNode});
@@ -472,10 +499,10 @@ class DOMComponent extends ProxyComponent{
     }
 }
 
-/**@class InnerHTMLComponent
- * This is the proxy for inner HTML (strings, numbers, ...)
+/**@class InnerHTMLManager
+ * This is the manager for inner HTML (strings, numbers, ...)
  * */
-class InnerHTMLComponent extends ProxyComponent {
+class InnerHTMLManager extends Manager {
     constructor(element) {
         super(element);
         this.innerHTML = null
@@ -501,12 +528,19 @@ class InnerHTMLComponent extends ProxyComponent {
     }
 
     receive(nextElement, actor) {
-        /*Do nothing special since everything should be handled by parent*/
+        if(this.innerHTML.textContent !== nextElement.toString()) {
+            const newInnerHTML = document.createTextNode(nextElement);
+            this.innerHTML.replaceWith(newInnerHTML);
+            this.innerHTML = newInnerHTML;
+        }
         return null;
     }
 }
 
-class ArrayProxyComponent extends ProxyComponent {
+/**
+ * This is the manager for arrays of values
+ * */
+class ArrayManager extends Manager {
     constructor(elements) {
         super(elements);
 
@@ -525,10 +559,10 @@ class ArrayProxyComponent extends ProxyComponent {
     mount(actor) {
         const elements = this.currentElement;
 
-        let renderedElements = elements.flatMap(instantiateComponent);
+        let renderedElements = elements.flatMap(instantiateManager);
 
         if(renderedElements.length === 0) {
-            const placeholder = instantiateComponent({elementName: 'empty', attributes: {}, children: []});
+            const placeholder = instantiateManager({elementName: 'empty', attributes: {}, children: []});
             this.renderedElements = [placeholder]
         } else {
             this.renderedElements = renderedElements
@@ -558,7 +592,7 @@ class ArrayProxyComponent extends ProxyComponent {
                 renderedElement.getHostNode().remove();
                 return false;
             } else {
-                const newReference = instantiateComponent({elementName: 'empty', attributes: {}, children: []});
+                const newReference = instantiateManager({elementName: 'empty', attributes: {}, children: []});
                 const newReferenceMounted = newReference.mount(actor);
 
                 reference.getHostNode().replaceWith(newReferenceMounted);
@@ -579,7 +613,7 @@ class ArrayProxyComponent extends ProxyComponent {
                     return [...arr, prevRenderedElement]
                 }
             }
-            const nextRenderedElement = instantiateComponent(nextElement);
+            const nextRenderedElement = instantiateManager(nextElement);
             const nextNode = nextRenderedElement.mount(actor);
             const sibling = arr[i - 1];
 
@@ -605,18 +639,18 @@ class ArrayProxyComponent extends ProxyComponent {
     }
 }
 
-/**@function Factory pattern to create correct ProxyComponents
- * Anything that is not a function or string is considered an InnerHTMLComponent
+/**@function Factory pattern to create correct Managers
+ * Anything that is not a function or string is considered an InnerHTMLManager
  * */
-export default function instantiateComponent(element) {
+export default function instantiateManager(element) {
     if(Array.isArray(element))
-        return new ArrayProxyComponent(element);
+        return new ArrayManager(element);
     else if(typeof element !== 'object')
-        return new InnerHTMLComponent(element);
+        return new InnerHTMLManager(element);
     else if(typeof element.elementName === 'string')
-        return new DOMComponent(element);
+        return new PrimitiveManager(element);
     else if(element.elementName.prototype instanceof SyncComponent)
-        return new SyncCompositeComponent(element);
+        return new SyncManager(element);
     else if(element.elementName.prototype instanceof AsyncComponent)
-        return new AsyncCompositeComponent(element);
+        return new AsyncManager(element);
 }
